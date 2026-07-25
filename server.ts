@@ -174,25 +174,80 @@ async function startServer() {
     }
   });
 
-  // GOOGLE SHEETS IMPORT ROUTE
+  // GOOGLE SHEETS IMPORT ROUTE (Supports both OAuth and Public Shared Google Sheets)
   app.post('/api/sheets/import', async (req, res) => {
     try {
       const { tokens, spreadsheetId } = req.body;
-      if (!tokens || !spreadsheetId) {
-        return res.status(400).json({ success: false, error: 'Spreadsheet ID atau token tidak ditemukan.' });
+      if (!spreadsheetId) {
+        return res.status(400).json({ success: false, error: 'Spreadsheet ID atau URL tidak ditemukan.' });
       }
 
-      const oauth2Client = getOAuth2Client(req);
-      oauth2Client.setCredentials(tokens);
+      // Extract clean Spreadsheet ID if full URL was pasted
+      let cleanId = spreadsheetId.trim();
+      if (cleanId.includes('/d/')) {
+        const match = cleanId.match(/\/d\/([a-zA-Z0-9-_]+)/);
+        if (match && match[1]) cleanId = match[1];
+      }
 
-      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+      let rows: any[][] = [];
 
-      const getRes = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: 'A1:Z300'
-      });
+      // Try OAuth first if tokens are provided
+      if (tokens) {
+        try {
+          const oauth2Client = getOAuth2Client(req);
+          oauth2Client.setCredentials(tokens);
+          const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+          const getRes = await sheets.spreadsheets.values.get({
+            spreadsheetId: cleanId,
+            range: 'A1:Z300'
+          });
+          rows = getRes.data.values || [];
+        } catch (oauthErr: any) {
+          console.warn('OAuth fetch failed, falling back to public CSV fetch:', oauthErr.message);
+        }
+      }
 
-      const rows = getRes.data.values;
+      // Fallback: Fetch as public CSV if no tokens or if OAuth fetch failed
+      if (!rows || rows.length === 0) {
+        const csvUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:csv`;
+        const csvRes = await fetch(csvUrl);
+        if (!csvRes.ok) {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Gagal mengambil data dari Google Sheets. Pastikan Spreadsheet Anda sudah diset akses "Siapa saja yang memiliki link" (Anyone with the link).' 
+          });
+        }
+        const csvText = await csvRes.text();
+        
+        // Simple CSV parser supporting quotes
+        const parseCSV = (text: string) => {
+          const lines = text.split(/\r?\n/);
+          return lines.map(line => {
+            const result = [];
+            let cell = '';
+            let inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+              const char = line[i];
+              if (char === '"' && line[i + 1] === '"') {
+                cell += '"';
+                i++;
+              } else if (char === '"') {
+                inQuotes = !inQuotes;
+              } else if (char === ',' && !inQuotes) {
+                result.push(cell);
+                cell = '';
+              } else {
+                cell += char;
+              }
+            }
+            result.push(cell);
+            return result;
+          });
+        };
+
+        rows = parseCSV(csvText);
+      }
+
       if (!rows || rows.length < 5) {
         return res.status(400).json({ success: false, error: 'Data spreadsheet kosong atau format tidak sesuai.' });
       }
@@ -207,7 +262,7 @@ async function startServer() {
       }
 
       if (headerIdx === -1) {
-        return res.status(400).json({ success: false, error: 'Header baris tidak ditemukan di Google Sheets' });
+        return res.status(400).json({ success: false, error: 'Header baris tidak ditemukan di Google Sheets. Pastikan terdapat kolom "Nama Siswa" atau "Nama".' });
       }
 
       const headers = rows[headerIdx].map((h: any) => String(h).toLowerCase().trim());

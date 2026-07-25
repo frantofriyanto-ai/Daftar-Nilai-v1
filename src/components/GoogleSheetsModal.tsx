@@ -327,14 +327,9 @@ function tampilkanPetunjuk() {
   };
 
   const handleImportFromSheets = async () => {
-    if (!tokens) {
-      alert('Silakan hubungkan Akun Google terlebih dahulu.');
-      return;
-    }
-
     const targetId = customSpreadsheetInput.trim() || spreadsheetId;
     if (!targetId) {
-      alert('Silakan masukkan ID Spreadsheet atau sinkronkan data terlebih dahulu.');
+      alert('Silakan masukkan ID Spreadsheet atau URL Google Sheet.');
       return;
     }
 
@@ -367,7 +362,7 @@ function tampilkanPetunjuk() {
         showToast(`Berhasil mengimpor ${data.students.length} data siswa dari Google Sheets!`);
         onClose();
       } else {
-        alert('Gagal mengimpor data: ' + (data.error || 'Format tidak sesuai.'));
+        alert('Gagal mengimpor data: ' + (data.error || 'Format tidak sesuai. Pastikan Spreadsheet dapat diakses via link.'));
       }
     } catch (err: any) {
       alert('Terjadi kesalahan saat mengimpor data dari Google Sheets.');
@@ -438,6 +433,23 @@ function tampilkanPetunjuk() {
               </button>
             )}
           </div>
+
+          {!tokens && (
+            <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200/80 text-[11px] text-amber-900 space-y-1.5 leading-relaxed">
+              <p className="font-bold flex items-center gap-1.5 text-amber-950">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Solusi Bebas Kendala "Akses Diblokir / Error Otorisasi Google":</span>
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-amber-900/90 pl-1">
+                <li>
+                  <strong>Metode Apps Script (Sangat Direkomendasikan)</strong>: Buka Google Sheets Anda &gt; <em>Extensions &gt; Apps Script</em>, salin kode di bagian bawah modal ini. Menu kustom <strong>🎓 DAFTAR NILAI AKADEMIK &gt; Buat Initial Data</strong> akan langsung aktif di Sheets Anda tanpa perlu login OAuth!
+                </li>
+                <li>
+                  <strong>Impor Bebas Login</strong>: Cukup bagikan Spreadsheet Anda ("Siapa saja yang memiliki link"), tempel URL/ID-nya di kolom impor di bawah, lalu klik <strong>Impor</strong>.
+                </li>
+              </ul>
+            </div>
+          )}
 
           {/* Sync Action Section */}
           <div className="space-y-4">
