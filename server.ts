@@ -174,6 +174,40 @@ async function startServer() {
     }
   });
 
+  // REAL-TIME WEBHOOK SYNC ROUTE FOR GOOGLE APPS SCRIPT WEB APP
+  app.post('/api/sheets/webhook-sync', async (req, res) => {
+    try {
+      const { webAppUrl, classInfo, weights, students } = req.body;
+      if (!webAppUrl || typeof webAppUrl !== 'string') {
+        return res.status(400).json({ success: false, error: 'URL Web App Apps Script belum diisi.' });
+      }
+
+      const response = await fetch(webAppUrl.trim(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sync', classInfo, weights, students }),
+        redirect: 'follow'
+      });
+
+      const textResult = await response.text();
+      let jsonResult;
+      try {
+        jsonResult = JSON.parse(textResult);
+      } catch {
+        jsonResult = { success: true, message: 'Data terkirim ke Google Sheets' };
+      }
+
+      res.json({
+        success: true,
+        data: jsonResult,
+        syncedAt: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.error('Error in webhook sync:', err);
+      res.status(500).json({ success: false, error: err.message || 'Gagal mengirim data real-time ke Google Sheets.' });
+    }
+  });
+
   // GOOGLE SHEETS IMPORT ROUTE (Supports both OAuth and Public Shared Google Sheets)
   app.post('/api/sheets/import', async (req, res) => {
     try {

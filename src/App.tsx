@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { GradeTable } from './components/GradeTable';
 import { ReminderSystem } from './components/ReminderSystem';
@@ -45,6 +45,46 @@ export default function App() {
   const pendingRemindersCount = useMemo(() => {
     return generateAutomaticReminders(calculatedStudents, info.subjectName, info.kkm).length;
   }, [calculatedStudents, info]);
+
+  // Real-Time Auto-Sync to Google Sheets Web App Endpoint
+  const [realtimeSyncState, setRealtimeSyncState] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+
+  useEffect(() => {
+    const webAppUrl = localStorage.getItem('google_apps_script_url');
+    const autoSync = localStorage.getItem('google_sheets_auto_sync') === 'true';
+
+    if (!webAppUrl || !autoSync) {
+      setRealtimeSyncState('idle');
+      return;
+    }
+
+    setRealtimeSyncState('syncing');
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/sheets/webhook-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webAppUrl,
+            classInfo: info,
+            weights,
+            students: calculatedStudents
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          setRealtimeSyncState('synced');
+          setTimeout(() => setRealtimeSyncState('idle'), 3000);
+        } else {
+          setRealtimeSyncState('error');
+        }
+      } catch (err) {
+        setRealtimeSyncState('error');
+      }
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [calculatedStudents, weights, info]);
 
   // Handlers
   const handleUpdateGrade = (id: string, field: keyof CalculatedGrade, value: any) => {
@@ -110,6 +150,30 @@ export default function App() {
       {toastMessage && (
         <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-2 animate-in slide-in-from-bottom-5">
           <span>✨ {toastMessage}</span>
+        </div>
+      )}
+
+      {/* Real-Time Google Sheets Auto-Sync Status Indicator */}
+      {realtimeSyncState !== 'idle' && (
+        <div className="fixed bottom-5 left-5 z-50 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-2.5 animate-in slide-in-from-bottom-5">
+          {realtimeSyncState === 'syncing' && (
+            <>
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
+              <span>⚡ Menyimpan nilai ke Google Sheets...</span>
+            </>
+          )}
+          {realtimeSyncState === 'synced' && (
+            <>
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
+              <span className="text-emerald-300">✅ Tersinkron ke Google Sheets Real-Time!</span>
+            </>
+          )}
+          {realtimeSyncState === 'error' && (
+            <>
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-400 shrink-0" />
+              <span className="text-rose-300">⚠️ Gagal auto-sync ke Google Sheets</span>
+            </>
+          )}
         </div>
       )}
 

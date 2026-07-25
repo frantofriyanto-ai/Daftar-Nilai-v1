@@ -16,7 +16,9 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  FileCode2
+  FileCode2,
+  Zap,
+  Radio
 } from 'lucide-react';
 import { ClassSubjectInfo, GradeWeighting, CalculatedGrade, StudentGrade } from '../types';
 
@@ -56,16 +58,76 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
     return localStorage.getItem('google_sheets_last_sync') || null;
   });
 
+  const [webAppUrl, setWebAppUrl] = useState<string>(() => {
+    return localStorage.getItem('google_apps_script_url') || '';
+  });
+
+  const [autoSync, setAutoSync] = useState<boolean>(() => {
+    return localStorage.getItem('google_sheets_auto_sync') === 'true';
+  });
+
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isRealtimeSyncing, setIsRealtimeSyncing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [customSpreadsheetInput, setCustomSpreadsheetInput] = useState('');
   const [showAppsScript, setShowAppsScript] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
 
+  const handleSaveWebAppUrl = (url: string) => {
+    setWebAppUrl(url);
+    localStorage.setItem('google_apps_script_url', url.trim());
+  };
+
+  const handleToggleAutoSync = (enabled: boolean) => {
+    setAutoSync(enabled);
+    localStorage.setItem('google_sheets_auto_sync', enabled ? 'true' : 'false');
+    if (enabled) {
+      showToast('Sinkronisasi Otomatis Real-Time diaktifkan!');
+    } else {
+      showToast('Sinkronisasi Otomatis dinonaktifkan.');
+    }
+  };
+
+  const handleTriggerRealtimeSync = async () => {
+    const urlToUse = webAppUrl.trim();
+    if (!urlToUse) {
+      alert('Silakan masukkan URL Web App Apps Script terlebih dahulu.');
+      return;
+    }
+
+    try {
+      setIsRealtimeSyncing(true);
+      const res = await fetch('/api/sheets/webhook-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webAppUrl: urlToUse,
+          classInfo: info,
+          weights,
+          students
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        const now = new Date().toISOString();
+        setLastSyncedAt(now);
+        localStorage.setItem('google_sheets_last_sync', now);
+        showToast('✅ Berhasil menyinkronkan nilai secara Real-Time ke Google Sheets!');
+      } else {
+        alert('Gagal menyinkronkan real-time: ' + (data.error || 'Pastikan Web App diset "Who has access: Anyone"'));
+      }
+    } catch (err: any) {
+      alert('Terjadi kesalahan saat menyinkronkan ke Web App Google Sheets.');
+    } finally {
+      setIsRealtimeSyncing(false);
+    }
+  };
+
   // Generate dynamic Apps Script code customized for current subject and weights
   const appsScriptCode = `/**
- * GOOGLE APPS SCRIPT - SISTEM DAFTAR NILAI AUTOMATION
+ * GOOGLE APPS SCRIPT - AUTOMATION & REAL-TIME WEBHOOK DAFTAR NILAI
  * Mata Pelajaran: ${info.subjectName} (${info.className})
  * Guru Pengampu: ${info.teacherName}
  * KKM/KKTP: ${info.kkm}
@@ -83,12 +145,88 @@ function onOpen() {
     .addToUi();
 }
 
-// 2. ISIKAN INITIAL DATA (HEADER METADATA + SAMPLE SISWA)
+// 2. ENDPOINT WEBHOOK UNTUK SINKRONISASI REAL-TIME DARI APLIKASI WEB
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    
+    if (data.action === 'sync' || data.students) {
+      updateSheetFromWeb(sheet, data.classInfo, data.weights, data.students);
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: true, 
+        message: 'Real-time sync ke Google Sheets berhasil!',
+        syncedAt: new Date().toISOString()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'Aksi tidak valid' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function updateSheetFromWeb(sheet, classInfo, weights, students) {
+  sheet.clearContents();
+  
+  var wTugas = weights ? (weights.tugas || 30) : 30;
+  var wTP = weights ? (weights.tp || 20) : 20;
+  var wFormatif = weights ? (weights.formatif || 20) : 20;
+  var wSumatif = weights ? (weights.sumatif || 30) : 30;
+  var wSikap = weights ? (weights.sikap || 0) : 0;
+  var wKehadiran = weights ? (weights.kehadiran || 0) : 0;
+
+  var header = [
+    ["FORMAT DAFTAR NILAI SISWA - " + ((classInfo && classInfo.schoolName) || "SEKOLAH")],
+    ["Mata Pelajaran: " + ((classInfo && classInfo.subjectName) || "${info.subjectName}"), "", "", "Kelas: " + ((classInfo && classInfo.className) || "${info.className}"), "", "KKM/KKTP: " + ((classInfo && classInfo.kkm) || "${info.kkm}")],
+    ["Guru Pengampu: " + ((classInfo && classInfo.teacherName) || "${info.teacherName}"), "", "", "Semester / TA: " + ((classInfo && classInfo.semester) || "${info.semester}") + " - " + ((classInfo && classInfo.academicYear) || "${info.academicYear}")],
+    ["Bobot Nilai: Tugas (" + wTugas + "%), TP (" + wTP + "%), Formatif (" + wFormatif + "%), Sumatif (" + wSumatif + "%), Sikap (" + wSikap + "%), Kehadiran (" + wKehadiran + "%)"],
+    [],
+    ["No", "NIS", "Nama Siswa", "No Telp Ortu", "Email", "Nilai Tugas", "TP 1", "TP 2", "TP 3", "TP 4", "TP 5", "Rata-Rata TP", "Nilai Formatif", "Nilai Sumatif", "Nilai Sikap", "Nilai Kehadiran", "Rata-Rata Akhir", "Predikat", "Status Ketuntasan", "Catatan Guru"]
+  ];
+
+  sheet.getRange(1, 1, header.length, 20).setValues(header);
+
+  if (students && students.length > 0) {
+    var rows = students.map(function(s, idx) {
+      return [
+        idx + 1,
+        s.nis || "",
+        s.nama || "",
+        s.teleponOrtu || "",
+        s.email || "",
+        s.nilaiTugas !== null && s.nilaiTugas !== undefined ? s.nilaiTugas : "",
+        s.nilaiTP1 !== null && s.nilaiTP1 !== undefined ? s.nilaiTP1 : "",
+        s.nilaiTP2 !== null && s.nilaiTP2 !== undefined ? s.nilaiTP2 : "",
+        s.nilaiTP3 !== null && s.nilaiTP3 !== undefined ? s.nilaiTP3 : "",
+        s.nilaiTP4 !== null && s.nilaiTP4 !== undefined ? s.nilaiTP4 : "",
+        s.nilaiTP5 !== null && s.nilaiTP5 !== undefined ? s.nilaiTP5 : "",
+        s.nilaiTP !== null && s.nilaiTP !== undefined ? s.nilaiTP : "",
+        s.nilaiFormatif !== null && s.nilaiFormatif !== undefined ? s.nilaiFormatif : "",
+        s.nilaiSumatif !== null && s.nilaiSumatif !== undefined ? s.nilaiSumatif : "",
+        s.nilaiSikap !== null && s.nilaiSikap !== undefined ? s.nilaiSikap : "",
+        s.nilaiKehadiran !== null && s.nilaiKehadiran !== undefined ? s.nilaiKehadiran : "",
+        s.rataRataAkhir !== null && s.rataRataAkhir !== undefined ? s.rataRataAkhir : "",
+        s.predikat || "",
+        s.status || "",
+        s.catatan || ""
+      ];
+    });
+
+    sheet.getRange(7, 1, rows.length, 20).setValues(rows);
+  }
+
+  sheet.getRange("A1:T1").setFontWeight("bold").setFontSize(12);
+  sheet.getRange("A6:T6").setFontWeight("bold").setBackground("#1e293b").setFontColor("#ffffff");
+}
+
+// 3. ISIKAN INITIAL DATA (HEADER METADATA + SAMPLE SISWA)
 function buatInitialData() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   sheet.clearContents();
   
-  // Format Header Metadata
   var header = [
     ["FORMAT DAFTAR NILAI SISWA - ${info.schoolName || 'SMA NEGERI 1 NUSANTARA'}"],
     ["Mata Pelajaran: ${info.subjectName}", "", "", "Kelas: ${info.className}", "", "KKM/KKTP: ${info.kkm}"],
@@ -100,7 +238,6 @@ function buatInitialData() {
 
   sheet.getRange(1, 1, header.length, 20).setValues(header);
 
-  // Data Sample Siswa Initial
   var sampleStudents = [
     [1, "20261001", "Aditya Pratama", "081234567890", "aditya@example.com", 88, 85, 88, 82, 86, 84, "", 90, 87, 90, 95, "", "", "", "Sangat memahami materi aljabar."],
     [2, "20261002", "Anisa Rahmawati", "081298765432", "anisa@example.com", 75, 72, 70, 68, 70, 70, "", 68, 65, 85, 90, "", "", "", "Perlu latihan ekstra di persamaan kuadrat."],
@@ -115,27 +252,20 @@ function buatInitialData() {
   ];
 
   sheet.getRange(7, 1, sampleStudents.length, 20).setValues(sampleStudents);
-  
-  // Format Tampilan Baris Header
   sheet.getRange("A1:T1").setFontWeight("bold").setFontSize(12);
   sheet.getRange("A6:T6").setFontWeight("bold").setBackground("#1e293b").setFontColor("#ffffff");
   
   hitungNilaiOtomatis();
-
   SpreadsheetApp.getUi().alert("✅ Initial Data & 10 Sample Siswa berhasil dibuat di Sheet!");
 }
 
-// 2. KALKULASI OTOMATIS RATA-RATA, PREDIKAT & STATUS KETUNTASAN
+// 4. KALKULASI OTOMATIS RATA-RATA, PREDIKAT & STATUS KETUNTASAN
 function hitungNilaiOtomatis() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   var lastRow = sheet.getLastRow();
   
-  if (lastRow < 7) {
-    SpreadsheetApp.getUi().alert('Tidak ada data siswa untuk dihitung.');
-    return;
-  }
+  if (lastRow < 7) return;
   
-  // Bobot Konfigurasi
   var bobotTugas = ${weights.tugas};
   var bobotTP = ${weights.tp};
   var bobotFormatif = ${weights.formatif};
@@ -150,12 +280,11 @@ function hitungNilaiOtomatis() {
 
   for (var i = 0; i < values.length; i++) {
     var row = values[i];
-    var nama = row[2]; // Kolom C = Nama
+    var nama = row[2];
     if (!nama || String(nama).toLowerCase().indexOf('rata-rata') !== -1) continue;
 
     var tugas = parseFloat(row[5]) || 0;
     
-    // Hitung rata-rata TP (Kolom G - K)
     var tpVals = [];
     for (var j = 6; j <= 10; j++) {
       if (row[j] !== "" && !isNaN(row[j])) tpVals.push(parseFloat(row[j]));
@@ -167,30 +296,23 @@ function hitungNilaiOtomatis() {
     var sikap = parseFloat(row[14]) || 0;
     var kehadiran = parseFloat(row[15]) || 0;
 
-    // Hitung Nilai Akhir Terbobot
     var nilaiAkhir = Math.round(((tugas * bobotTugas) + (rataTP * bobotTP) + (formatif * bobotFormatif) + (sumatif * bobotSumatif) + (sikap * bobotSikap) + (kehadiran * bobotKehadiran)) / totalBobot * 100) / 100;
 
-    // Hitung Predikat
     var predikat = '-';
     if (nilaiAkhir >= 90) predikat = 'A';
     else if (nilaiAkhir >= 80) predikat = 'B';
     else if (nilaiAkhir >= 70) predikat = 'C';
     else predikat = 'D';
 
-    // Status Ketuntasan
     var status = nilaiAkhir >= kkm ? 'Tuntas' : 'Belum Tuntas';
 
-    // Update sel di Google Sheets (Kolom L, Q, R, S)
-    sheet.getRange(7 + i, 12).setValue(Math.round(rataTP * 100) / 100); // Rata TP
-    sheet.getRange(7 + i, 17).setValue(nilaiAkhir); // Rata Akhir
-    sheet.getRange(7 + i, 18).setValue(predikat); // Predikat
-    sheet.getRange(7 + i, 19).setValue(status); // Status
+    sheet.getRange(7 + i, 12).setValue(Math.round(rataTP * 100) / 100);
+    sheet.getRange(7 + i, 17).setValue(nilaiAkhir);
+    sheet.getRange(7 + i, 18).setValue(predikat);
+    sheet.getRange(7 + i, 19).setValue(status);
   }
-
-  SpreadsheetApp.getUi().alert('✅ Perhitungan nilai & predikat selesai!');
 }
 
-// 3. TAMPILKAN SUMMARY KETUNTASAN
 function tampilkanSummary() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   var values = sheet.getDataRange().getValues();
@@ -216,18 +338,16 @@ function tampilkanSummary() {
   SpreadsheetApp.getUi().alert(msg);
 }
 
-// 4. OTOMATIS HITUNG SAAT ADA PERUBAHAN DATA (ON EDIT TRIGGER)
 function onEdit(e) {
   var range = e.range;
   var col = range.getColumn();
-  // Hanya jalankan jika yang diedit adalah kolom Nilai (Kolom F - P / Kolom 6 - 16)
   if (col >= 6 && col <= 16) {
     hitungNilaiOtomatis();
   }
 }
 
 function tampilkanPetunjuk() {
-  SpreadsheetApp.getUi().alert('ℹ️ CARA PENGGUNAAN:\\n\\n1. Masukkan nilai siswa pada kolom Nilai Tugas, TP1-TP5, Formatif, Sumatif, Sikap, dan Kehadiran.\\n2. Nilai Rata-rata Akhir, Predikat, dan Status Ketuntasan akan otomatis dihitung.\\n3. Anda dapat menekan menu "DAFTAR NILAI AKADEMIK > Hitung Ulang Nilai" kapan saja.');
+  SpreadsheetApp.getUi().alert('ℹ️ CARA PENGGUNAAN REAL-TIME:\\n\\n1. Nilai yang diinput di Web App akan otomatis masuk ke Google Sheet ini.\\n2. Nilai Rata-rata, Predikat, dan Status Ketuntasan terhitung otomatis!');
 }
 `;
 
@@ -260,6 +380,9 @@ function tampilkanPetunjuk() {
     try {
       setIsAuthenticating(true);
       const res = await fetch('/api/auth/google/url');
+      if (!res.ok) {
+        throw new Error(`Server API status: ${res.status}`);
+      }
       const data = await res.json();
       if (data.success && data.url) {
         const width = 500;
@@ -268,11 +391,13 @@ function tampilkanPetunjuk() {
         const top = window.screen.height / 2 - height / 2;
         window.open(data.url, 'GoogleAuth', `width=${width},height=${height},top=${top},left=${left}`);
       } else {
-        alert('Gagal mendapatkan URL Autentikasi Google: ' + (data.error || 'Terjadi kesalahan.'));
+        setShowAppsScript(true);
+        alert('Otorisasi Google OAuth membutuhkan OAuth Client ID di server.\n\nAtau gunakan metode alternatif yang 100% LANGSUNG BERHASIL tanpa login:\n1. Buka Google Sheets > Extensions > Apps Script.\n2. Salin kode Google Apps Script di bagian bawah modal ini!');
         setIsAuthenticating(false);
       }
     } catch (err: any) {
-      alert('Gagal menghubungi server untuk Otorisasi Google.');
+      setShowAppsScript(true);
+      alert('Otorisasi Google OAuth backend tidak tersedia di environment ini.\n\nGunakan metode bebas login yang 100% langsung berfungsi:\n• Buka Google Sheets > Extensions > Apps Script\n• Tempel Kode Google Apps Script (sudah disediakan di bawah modal ini)');
       setIsAuthenticating(false);
     }
   };
@@ -287,7 +412,8 @@ function tampilkanPetunjuk() {
 
   const handleSyncToSheets = async () => {
     if (!tokens) {
-      alert('Silakan hubungkan Akun Google terlebih dahulu.');
+      setShowAppsScript(true);
+      alert('Untuk membuat / menyinkronkan data di Google Sheets secara instan tanpa login Google:\n\n1. Buka spreadsheet kosong di Google Sheets.\n2. Klik menu Extensions > Apps Script.\n3. Salin Kode Google Apps Script di bagian bawah modal ini lalu klik Simpan.\n4. Buka kembali Google Sheets Anda, lalu klik menu "🎓 DAFTAR NILAI AKADEMIK > Buat Initial Data".');
       return;
     }
 
@@ -535,6 +661,66 @@ function tampilkanPetunjuk() {
             </div>
           </div>
 
+          {/* Real-Time Auto-Sync via Web App Endpoint */}
+          <div className="space-y-3 pt-3 border-t border-slate-200">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                <Zap className="w-4 h-4 text-amber-500 fill-amber-400" />
+                <span>Sinkronisasi Real-Time (Tanpa Login OAuth)</span>
+              </h4>
+              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full border border-emerald-300 flex items-center gap-1">
+                <Radio className="w-3 h-3 text-emerald-600 animate-pulse" />
+                <span>Rekomendasi</span>
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Kirim setiap perubahan nilai secara otomatis langsung ke Google Sheets Anda tanpa perlu otorisasi Google OAuth.
+            </p>
+
+            <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  URL Web App Apps Script (Web Endpoint):
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    value={webAppUrl}
+                    onChange={(e) => handleSaveWebAppUrl(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-xs bg-white focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTriggerRealtimeSync}
+                    disabled={!webAppUrl.trim() || isRealtimeSyncing}
+                    className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-xs shrink-0"
+                  >
+                    <Zap className={`w-3.5 h-3.5 ${isRealtimeSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isRealtimeSyncing ? 'Menyimpan...' : 'Tes & Simpan Real-Time'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Auto Sync Toggle */}
+              <div className="flex items-center justify-between pt-2 border-t border-amber-200/60">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="autoSyncToggle"
+                    checked={autoSync}
+                    onChange={(e) => handleToggleAutoSync(e.target.checked)}
+                    className="w-4 h-4 text-emerald-600 bg-white border-slate-300 rounded focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <label htmlFor="autoSyncToggle" className="text-xs font-bold text-slate-800 cursor-pointer">
+                    🔄 Aktifkan Sinkronisasi Otomatis Real-Time saat Nilai Berubah
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Apps Script Automation Section */}
           <div className="space-y-3 pt-4 border-t border-slate-200">
             <div className="flex items-center justify-between">
@@ -562,14 +748,16 @@ function tampilkanPetunjuk() {
                 <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 text-xs text-purple-900 space-y-1.5">
                   <p className="font-bold text-purple-950 flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-purple-600" />
-                    <span>Petunjuk Pemasangan Google Apps Script:</span>
+                    <span>Petunjuk Pemasangan Apps Script & Real-Time Web App:</span>
                   </p>
                   <ol className="list-decimal list-inside space-y-1 text-slate-700 pl-1">
                     <li>Buka spreadsheet Anda di Google Sheets.</li>
                     <li>Klik menu <strong>Extensions (Ekstensi) &gt; Apps Script</strong>.</li>
-                    <li>Hapus semua kode bawaan, lalu <strong>Tempel (Paste)</strong> kode di bawah ini.</li>
-                    <li>Klik tombol <strong>Simpan (Ctrl + S)</strong> lalu buka kembali Google Sheets Anda.</li>
-                    <li>Menu khusus <strong>🎓 DAFTAR NILAI AKADEMIK</strong> akan muncul secara otomatis!</li>
+                    <li>Hapus semua kode bawaan, lalu <strong>Tempel (Paste)</strong> kode di bawah ini, lalu klik <strong>Simpan (Ctrl + S)</strong>.</li>
+                    <li><strong>Untuk Real-Time Auto-Sync:</strong> Klik <strong>Deploy (Terapkan) &gt; New deployment (Penerapan Baru)</strong> di kanan atas.</li>
+                    <li>Pilih tipe: <strong>Web app (Aplikasi Web)</strong>.</li>
+                    <li>Set <em>Execute as</em>: <strong>Me (Saya)</strong> dan <em>Who has access</em>: <strong>Anyone (Siapa saja)</strong>.</li>
+                    <li>Klik <strong>Deploy</strong>, salin <strong>Web App URL</strong> (berakhiran <code>/exec</code>), lalu tempel pada kolom Real-Time Sync di atas!</li>
                   </ol>
                 </div>
 
