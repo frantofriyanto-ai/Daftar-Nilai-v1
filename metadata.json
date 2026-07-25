@@ -1,0 +1,6 @@
+{
+  "name": "Daftar Nilai Siswa & Pengingat Excel",
+  "description": "Aplikasi rekapitulasi nilai siswa dengan kalkulasi otomatis, ekspor file Excel berformula, dan sistem pengingat otomatis untuk tugas & remedial.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
